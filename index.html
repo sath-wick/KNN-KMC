@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML Visualizer Teaching Aid</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #1f2937;
+            --sidebar-bg: #f3f4f6;
+            --canvas-bg: #f9fafb;
+        }
+        .dark {
+            --bg-color: #111827;
+            --text-color: #f9fafb;
+            --sidebar-bg: #1f2937;
+            --canvas-bg: #000000;
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            transition: all 0.3s ease;
+        }
+        #sidebar {
+            background-color: var(--sidebar-bg);
+        }
+        canvas {
+            background-color: var(--canvas-bg);
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body class="h-screen flex overflow-hidden dark">
+
+    <!-- Left Sidebar -->
+    <div id="sidebar" class="w-72 h-full flex flex-col p-6 shadow-lg border-r border-gray-700 z-10">
+        
+        <!-- Header & Algorithm Toggle -->
+        <div class="flex items-center justify-between mb-6">
+            <h1 id="app-title" class="text-xl font-bold transition-all">KNN Visualizer</h1>
+            <label class="inline-flex items-center cursor-pointer ml-2 shrink-0" title="Toggle Algorithm">
+                <input type="checkbox" id="algo-toggle" class="sr-only peer">
+                <div class="w-10 h-5 relative bg-blue-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-600"></div>
+            </label>
+        </div>
+        
+        <div class="flex gap-2 mb-6">
+            <button id="btn-data" class="flex-1 py-2 px-4 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold transition">Data</button>
+            <button id="btn-vis" class="flex-1 py-2 px-4 rounded bg-gray-600 hover:bg-gray-500 text-white font-semibold transition">Visualize</button>
+        </div>
+
+        <!-- Data Entry View Controls -->
+        <div id="view-data" class="flex flex-col gap-4">
+            <h2 class="text-lg font-semibold">Training Data</h2>
+            
+            <div id="knn-data-msg">
+                <p class="text-sm opacity-80 mb-4">Click the canvas to add points for the selected class.</p>
+                <div id="class-list" class="flex flex-col gap-2"></div>
+                <button id="btn-add-class" class="w-full mt-2 py-2 px-4 border border-dashed border-gray-400 rounded hover:bg-gray-500 hover:bg-opacity-20 transition text-sm">
+                    + Add New Class (Max 4)
+                </button>
+            </div>
+
+            <div id="kmeans-data-msg" class="hidden">
+                <p class="text-sm opacity-80">Click the canvas to add unlabeled data points.</p>
+                <p class="text-xs text-yellow-500 mt-2">K-Means is unsupervised, so points have no predefined classes.</p>
+            </div>
+            
+            <button id="btn-clear" class="mt-auto py-2 px-4 bg-red-600 hover:bg-red-500 text-white rounded transition">Clear Canvas</button>
+        </div>
+
+        <!-- Visualization View Controls -->
+        <div id="view-vis" class="flex flex-col gap-4 hidden">
+            <h2 class="text-lg font-semibold">Algorithm Steps</h2>
+            
+            <div>
+                <label id="k-label" class="block text-sm mb-1">K Value (Neighbors):</label>
+                <input type="number" id="k-input" value="3" min="1" max="15" class="w-full p-2 rounded bg-gray-800 text-white border border-gray-600">
+            </div>
+
+            <p id="vis-instruct" class="text-sm opacity-80 mt-2">Click canvas to place a test point.</p>
+            
+            <div class="mt-4 p-4 bg-gray-800 rounded border border-gray-700">
+                <button id="btn-next" class="w-full py-2 px-4 bg-green-600 hover:bg-green-500 text-white rounded transition disabled:opacity-50 disabled:cursor-not-allowed" disabled>Next Step</button>
+            </div>
+        </div>
+
+        <div class="mt-auto pt-6 flex items-center justify-between">
+            <span class="text-sm">Theme</span>
+            <button id="btn-theme" class="px-3 py-1 bg-gray-600 rounded text-sm hover:bg-gray-500">Toggle Dark</button>
+        </div>
+    </div>
+
+    <!-- Main Canvas Area -->
+    <div class="flex-1 flex-col relative p-4 flex items-center justify-center">
+	    <p id="step-desc" class="text-xl font-bold mb-2">Awaiting test point...</p>
+        <canvas id="canvas" width="800" height="600" class="rounded-lg shadow-2xl border border-gray-700"></canvas>
+    </div>
+
+    <script>
+        // State
+        let algorithm = 'knn'; // 'knn' or 'kmeans'
+        let mode = 'data'; 
+        let points = [];
+        let testPoint = null;
+        let activeClassId = 0;
+        let kValue = 3;
+        
+        // KNN State
+        let visStep = 0;
+        let neighbors = [];
+        let maxDistance = 0;
+        let predictedClass = null;
+
+        // K-Means State
+        let centroids = [];
+
+        // Default Classes / Colors
+        const classes = [
+            { id: 0, name: 'Class A', color: '#ef4444' }, // Red
+            { id: 1, name: 'Class B', color: '#3b82f6' }  // Blue
+        ];
+        const clusterColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ec4899'];
+        const colors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b']; 
+
+        // DOM Elements
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const btnData = document.getElementById('btn-data');
+        const btnVis = document.getElementById('btn-vis');
+        const viewData = document.getElementById('view-data');
+        const viewVis = document.getElementById('view-vis');
+        const classList = document.getElementById('class-list');
+        const btnAddClass = document.getElementById('btn-add-class');
+        const kInput = document.getElementById('k-input');
+        const btnNext = document.getElementById('btn-next');
+        const stepDesc = document.getElementById('step-desc');
+        const algoToggle = document.getElementById('algo-toggle');
+
+        // Algorithm Toggle Logic
+        algoToggle.addEventListener('change', (e) => {
+            algorithm = e.target.checked ? 'kmeans' : 'knn';
+            document.getElementById('app-title').innerText = algorithm === 'knn' ? 'KNN Visualizer' : 'K-Means Clustering';
+            document.getElementById('k-label').innerText = algorithm === 'knn' ? 'K Value (Neighbors):' : 'K Value (Clusters):';
+            
+            // Adjust UI views
+            if (algorithm === 'kmeans') {
+                document.getElementById('knn-data-msg').classList.add('hidden');
+                document.getElementById('kmeans-data-msg').classList.remove('hidden');
+                document.getElementById('vis-instruct').innerText = "Make sure you have added data points.";
+            } else {
+                document.getElementById('knn-data-msg').classList.remove('hidden');
+                document.getElementById('kmeans-data-msg').classList.add('hidden');
+                document.getElementById('vis-instruct').innerText = "Click canvas to place a test point.";
+            }
+
+            points = []; // Clear canvas on swap to prevent confusion
+            resetVis();
+            draw();
+        });
+
+        // Theme Toggle
+        document.getElementById('btn-theme').addEventListener('click', () => {
+            document.body.classList.toggle('dark');
+            draw();
+        });
+
+        // Switch Modes
+        btnData.addEventListener('click', () => {
+            mode = 'data';
+            btnData.classList.replace('bg-gray-600', algorithm === 'knn' ? 'bg-blue-600' : 'bg-purple-600');
+            btnVis.classList.replace('bg-blue-600', 'bg-gray-600');
+            btnVis.classList.replace('bg-purple-600', 'bg-gray-600');
+            viewData.classList.remove('hidden');
+            viewVis.classList.add('hidden');
+            resetVis();
+            draw();
+        });
+
+        btnVis.addEventListener('click', () => {
+            mode = 'vis';
+            btnVis.classList.replace('bg-gray-600', algorithm === 'knn' ? 'bg-blue-600' : 'bg-purple-600');
+            btnData.classList.replace('bg-blue-600', 'bg-gray-600');
+            btnData.classList.replace('bg-purple-600', 'bg-gray-600');
+            viewVis.classList.remove('hidden');
+            viewData.classList.add('hidden');
+            resetVis();
+            draw();
+        });
+
+        // Class Management (For KNN)
+        function renderClassList() {
+            classList.innerHTML = '';
+            classes.forEach(c => {
+                const div = document.createElement('div');
+                div.className = `class-row flex items-center gap-2 p-2 rounded cursor-pointer border ${activeClassId === c.id ? 'border-blue-500 bg-gray-800' : 'border-transparent'}`;
+                
+                div.innerHTML = `
+                    <input type="color" value="${c.color}" class="w-6 h-6 rounded cursor-pointer" oninput="updateClassColor(${c.id}, this.value)">
+                    <input type="text" value="${c.name}" class="flex-1 bg-transparent border-b border-gray-600 focus:outline-none text-sm" oninput="updateClassName(${c.id}, this.value)">
+                `;
+                
+                div.onclick = () => { 
+                    activeClassId = c.id; 
+                    document.querySelectorAll('.class-row').forEach(row => {
+                        row.classList.remove('border-blue-500', 'bg-gray-800');
+                        row.classList.add('border-transparent');
+                    });
+                    div.classList.remove('border-transparent');
+                    div.classList.add('border-blue-500', 'bg-gray-800');
+                };
+                
+                classList.appendChild(div);
+            });
+            btnAddClass.style.display = classes.length >= 4 ? 'none' : 'block';
+        }
+
+        window.updateClassColor = (id, color) => { classes.find(c => c.id === id).color = color; draw(); };
+        window.updateClassName = (id, name) => { classes.find(c => c.id === id).name = name; };
+
+        btnAddClass.addEventListener('click', () => {
+            if (classes.length < 4) {
+                const newId = Math.max(...classes.map(c => c.id)) + 1;
+                classes.push({ id: newId, name: `Class ${String.fromCharCode(65 + classes.length)}`, color: colors[classes.length] });
+                activeClassId = newId;
+                renderClassList();
+            }
+        });
+
+        document.getElementById('btn-clear').addEventListener('click', () => {
+            points = [];
+            resetVis();
+            draw();
+        });
+
+        // Canvas Interaction
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            if (mode === 'data') {
+                points.push({ x, y, classId: algorithm === 'knn' ? activeClassId : null });
+                draw();
+            } else if (mode === 'vis' && algorithm === 'knn' && visStep === 0) {
+                testPoint = { x, y };
+                visStep = 1;
+                stepDesc.innerText = "Step 1: Test point is placed";
+                btnNext.disabled = false;
+                draw();
+            }
+        });
+
+        // Visualization Logic
+        kInput.addEventListener('change', (e) => { kValue = parseInt(e.target.value) || 3; });
+
+        function resetVis() {
+            visStep = 0;
+            testPoint = null;
+            neighbors = [];
+            predictedClass = null;
+            centroids = [];
+            
+            if (algorithm === 'kmeans') {
+                points.forEach(p => p.clusterId = null); // clear assignments
+                btnNext.disabled = points.length === 0;
+                stepDesc.innerText = points.length > 0 ? "Ready to initialize centroids." : "Add data points in the Data tab first.";
+                if(points.length > 0 && mode === 'vis') btnNext.innerText = "Initialize Centroids";
+            } else {
+                btnNext.disabled = true;
+                btnNext.innerText = "Next Step";
+                stepDesc.innerText = mode === 'vis' ? "Awaiting test point..." : "Ready.";
+            }
+        }
+
+        btnNext.addEventListener('click', () => {
+            if (algorithm === 'knn') {
+                // KNN Logic Pipeline
+                if (visStep === 1) {
+                    points.forEach(p => p.dist = Math.sqrt((p.x - testPoint.x)**2 + (p.y - testPoint.y)**2));
+                    visStep = 2;
+                    stepDesc.innerText = "Step 2: Distance between the point and all the existing data points is calculated.";
+                } else if (visStep === 2) {
+                    neighbors = [...points].sort((a, b) => a.dist - b.dist).slice(0, kValue);
+                    maxDistance = neighbors.length > 0 ? neighbors[neighbors.length - 1].dist : 0;
+                    visStep = 3;
+                    stepDesc.innerText = `Step 3: Found ${kValue} nearest neighbors`;
+                } else if (visStep === 3) {
+                    const counts = {};
+                    neighbors.forEach(n => { counts[n.classId] = (counts[n.classId] || 0) + 1; });
+                    let bestId = -1, maxCount = -1;
+                    for (const [id, count] of Object.entries(counts)) {
+                        if (count > maxCount) { maxCount = count; bestId = parseInt(id); }
+                    }
+                    predictedClass = classes.find(c => c.id === bestId);
+                    visStep = 4;
+                    stepDesc.innerText = `Step 4: Classified as ${predictedClass.name} based on majority.`;
+                    btnNext.innerText = "Reset";
+                } else if (visStep === 4) {
+                    resetVis();
+                }
+            } else {
+                // K-Means Logic Pipeline
+                if (visStep === 0) {
+                    // Initialize Centroids randomly within canvas bounds
+                    centroids = [];
+                    for(let i=0; i<kValue; i++) {
+                        centroids.push({
+                            x: 100 + Math.random() * (canvas.width - 200),
+                            y: 100 + Math.random() * (canvas.height - 200),
+                            color: clusterColors[i % clusterColors.length],
+                            id: i
+                        });
+                    }
+                    visStep = 1;
+                    stepDesc.innerText = `Step 1: Randomly initialized ${kValue} centroids. Click Next to assign points.`;
+                    btnNext.innerText = "Assign Points";
+                } else if (visStep % 2 === 1) {
+                    // Assign Points to Nearest Centroid
+                    let changed = false;
+                    points.forEach(p => {
+                        let minDist = Infinity;
+                        let bestC = null;
+                        centroids.forEach(c => {
+                            let d = Math.hypot(p.x - c.x, p.y - c.y);
+                            if(d < minDist) { minDist = d; bestC = c.id; }
+                        });
+                        if (p.clusterId !== bestC) changed = true;
+                        p.clusterId = bestC;
+                    });
+                    
+                    visStep++;
+                    if (!changed && visStep > 2) {
+                        stepDesc.innerText = `Algorithm Converged! Points did not change clusters.`;
+                        btnNext.innerText = "Reset";
+                        visStep = -1; // End state
+                    } else {
+                        stepDesc.innerText = `Step ${visStep}: Assigned data points to nearest centroid color.`;
+                        btnNext.innerText = "Update Centroids";
+                    }
+                } else if (visStep > 0 && visStep % 2 === 0) {
+                    // Update Centroid Positions
+                    centroids.forEach(c => {
+                        let assigned = points.filter(p => p.clusterId === c.id);
+                        if(assigned.length > 0) {
+                            c.x = assigned.reduce((sum, p) => sum + p.x, 0) / assigned.length;
+                            c.y = assigned.reduce((sum, p) => sum + p.y, 0) / assigned.length;
+                        }
+                    });
+                    visStep++;
+                    stepDesc.innerText = `Step ${visStep}: Centroids moved to the mean of their assigned points.`;
+                    btnNext.innerText = "Assign Points";
+                } else if (visStep === -1) {
+                    resetVis();
+                }
+            }
+            draw();
+        });
+
+        // Drawing Logic
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const isDark = document.body.classList.contains('dark');
+            const lineOpacity = isDark ? 0.3 : 0.2;
+
+            if (algorithm === 'knn') {
+                // KNN Drawing
+                if (mode === 'vis' && visStep === 2 && testPoint) {
+                    ctx.lineWidth = 1;
+                    points.forEach(p => {
+                        ctx.strokeStyle = `rgba(${isDark?'255,255,255':'0,0,0'}, ${lineOpacity})`;
+                        ctx.beginPath();
+                        ctx.moveTo(testPoint.x, testPoint.y);
+                        ctx.lineTo(p.x, p.y);
+                        ctx.stroke();
+                    });
+                }
+                if (mode === 'vis' && (visStep === 3 || visStep === 4) && testPoint) {
+                    ctx.beginPath();
+                    ctx.arc(testPoint.x, testPoint.y, maxDistance, 0, Math.PI * 2);
+                    ctx.strokeStyle = isDark ? '#ffffff' : '#000000';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([5, 5]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.lineWidth = 2;
+                    neighbors.forEach(n => {
+                        ctx.strokeStyle = classes.find(c => c.id === n.classId).color;
+                        ctx.beginPath();
+                        ctx.moveTo(testPoint.x, testPoint.y);
+                        ctx.lineTo(n.x, n.y);
+                        ctx.stroke();
+                    });
+                }
+
+                // Draw training points
+                points.forEach(p => {
+                    const c = classes.find(c => c.id === p.classId);
+                    if (!c) return;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                    ctx.fillStyle = c.color;
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = c.color;
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                    ctx.strokeStyle = isDark ? '#222' : '#fff';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                });
+
+                // Draw test point
+                if (testPoint) {
+                    ctx.beginPath();
+                    ctx.arc(testPoint.x, testPoint.y, 8, 0, Math.PI * 2);
+                    if (visStep === 4 && predictedClass) {
+                        ctx.fillStyle = predictedClass.color;
+                        ctx.shadowBlur = 20;
+                        ctx.shadowColor = predictedClass.color;
+                    } else {
+                        ctx.fillStyle = '#fde047';
+                        ctx.shadowBlur = 20;
+                        ctx.shadowColor = '#fde047';
+                    }
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                    ctx.strokeStyle = isDark ? '#fff' : '#000';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+
+            } else {
+                // K-Means Drawing
+                
+                // Draw connecting lines to centroids
+                if (mode === 'vis' && visStep >= 2) {
+                    ctx.lineWidth = 1;
+                    points.forEach(p => {
+                        if (p.clusterId !== null && p.clusterId !== undefined) {
+                            let c = centroids.find(c => c.id === p.clusterId);
+                            if (c) {
+                                ctx.strokeStyle = `rgba(${isDark?'255,255,255':'0,0,0'}, ${lineOpacity})`;
+                                ctx.beginPath();
+                                ctx.moveTo(p.x, p.y);
+                                ctx.lineTo(c.x, c.y);
+                                ctx.stroke();
+                            }
+                        }
+                    });
+                }
+
+                // Draw points
+                points.forEach(p => {
+                    let color = isDark ? '#555' : '#ccc'; // Default unassigned
+                    if (p.clusterId !== null && p.clusterId !== undefined) {
+                        let c = centroids.find(c => c.id === p.clusterId);
+                        if (c) color = c.color;
+                    }
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                    ctx.fillStyle = color;
+                    
+                    if (p.clusterId !== null) {
+                        ctx.shadowBlur = 15;
+                        ctx.shadowColor = color;
+                    }
+                    
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                    ctx.strokeStyle = isDark ? '#222' : '#fff';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                });
+
+                // Draw Centroids (Square shape)
+                centroids.forEach(c => {
+                    ctx.fillStyle = c.color;
+                    ctx.shadowBlur = 25;
+                    ctx.shadowColor = c.color;
+                    
+                    ctx.beginPath();
+                    ctx.rect(c.x - 8, c.y - 8, 16, 16);
+                    ctx.fill();
+                    
+                    ctx.shadowBlur = 0;
+                    ctx.strokeStyle = '#ffffff'; // Always stand out
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                });
+            }
+        }
+
+        // Initialize
+        renderClassList();
+        draw();
+    </script>
+</body>
+</html>
